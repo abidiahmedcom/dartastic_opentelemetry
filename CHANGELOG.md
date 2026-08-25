@@ -33,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`OTEL_RESOURCE_ATTRIBUTES` is honored when `detectPlatformResources` is
   `false`**, and a malformed value is dropped with a warning instead of
   failing `OTel.initialize`.
+- Regression test verifying `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` is applied
+  to both HTTP and gRPC metric exporters. (#229)
 
 ## [1.1.0-beta.14] - 2026-08-23
 
