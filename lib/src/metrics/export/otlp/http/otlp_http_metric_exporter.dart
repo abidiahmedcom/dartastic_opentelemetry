@@ -7,6 +7,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+import 'package:meta/meta.dart';
 
 import '../../../../../dartastic_opentelemetry.dart';
 import '../../../../export/otlp_json.dart';
@@ -22,7 +23,11 @@ class OtlpHttpMetricExporter implements MetricExporter {
     503, // Service Unavailable
   ];
 
-  final OtlpHttpMetricExporterConfig _config;
+  /// The configuration this exporter was created with. Exposed for
+  /// testing so that assertions can verify the resolved endpoint directly.
+  @visibleForTesting
+  final OtlpHttpMetricExporterConfig config;
+
   bool _isShutdown = false;
   final Random _random = Random();
   final List<Future<void>> _pendingExports = [];
@@ -33,7 +38,7 @@ class OtlpHttpMetricExporter implements MetricExporter {
   ///
   /// @param config Optional configuration for the exporter
   OtlpHttpMetricExporter([OtlpHttpMetricExporterConfig? config])
-      : _config = config ?? OtlpHttpMetricExporterConfig() {
+      : config = config ?? OtlpHttpMetricExporterConfig() {
     _client = _createHttpClient();
   }
 
@@ -43,13 +48,13 @@ class OtlpHttpMetricExporter implements MetricExporter {
   /// web gets a `BrowserClient` (the browser handles TLS).
   http.Client _createHttpClient() => createOtlpHttpClient(
         exporterName: 'OtlpHttpMetricExporter',
-        certificate: _config.certificate,
-        clientKey: _config.clientKey,
-        clientCertificate: _config.clientCertificate,
+        certificate: config.certificate,
+        clientKey: config.clientKey,
+        clientCertificate: config.clientCertificate,
       );
 
   Duration _calculateJitteredDelay(int retries) {
-    final baseMs = _config.baseDelay.inMilliseconds;
+    final baseMs = config.baseDelay.inMilliseconds;
     final delay = baseMs * pow(2, retries);
     final jitter = _random.nextDouble() * delay;
     return Duration(milliseconds: (delay + jitter).toInt());
@@ -57,7 +62,7 @@ class OtlpHttpMetricExporter implements MetricExporter {
 
   String _getEndpointUrl() {
     // Ensure the endpoint ends with /v1/metrics
-    var endpoint = _config.endpoint;
+    var endpoint = config.endpoint;
     if (!endpoint.endsWith('/v1/metrics')) {
       // Ensure there's no trailing slash before adding path
       if (endpoint.endsWith('/')) {
@@ -126,12 +131,12 @@ class OtlpHttpMetricExporter implements MetricExporter {
 
     if (OTelLog.isDebug()) {
       OTelLog.debug(
-        'OtlpHttpMetricExporter: Attempting to export ${metrics.metrics.length} metrics to ${_config.endpoint}',
+        'OtlpHttpMetricExporter: Attempting to export ${metrics.metrics.length} metrics to ${config.endpoint}',
       );
     }
 
     var attempts = 0;
-    final maxAttempts = _config.maxRetries + 1; // Initial attempt + retries
+    final maxAttempts = config.maxRetries + 1; // Initial attempt + retries
 
     while (attempts < maxAttempts) {
       // Allow the export to continue even during shutdown, so we complete in-flight requests
@@ -266,7 +271,7 @@ class OtlpHttpMetricExporter implements MetricExporter {
     final request = MetricTransformer.transformMetrics(
       metrics,
       fallbackResource: OTel.resource(null),
-      exemplarFilter: _config.exemplarFilter,
+      exemplarFilter: config.exemplarFilter,
     );
 
     if (OTelLog.isDebug()) {
@@ -276,18 +281,18 @@ class OtlpHttpMetricExporter implements MetricExporter {
     // Prepare headers + body. Wire format is selected by config.protocol —
     // protobuf (default) or JSON via proto3-JSON mapping. See
     // `OtlpHttpProtocol` for the conformance rationale.
-    final headers = Map<String, String>.from(_config.headers);
+    final headers = Map<String, String>.from(config.headers);
     // Default User-Agent per the OTLP exporter spec ("User agent"): the
     // exporter's default string is always present. A caller-supplied value
     // (typically a distribution identifier) is prepended to it, e.g.
     // "MyDistribution/1.0 OTel-OTLP-Exporter-Dart/1.1.0-beta.14-wip".
     // `headers` is a copy, and http's header map is case-insensitive, so the
     // User-Agent assignment below overrides the copied user-agent entry.
-    final userAgent = _config.headers['user-agent'];
+    final userAgent = config.headers['user-agent'];
     headers['User-Agent'] =
         userAgent == null ? otlpUserAgent : '$userAgent $otlpUserAgent';
     Uint8List messageBytes;
-    if (_config.protocol == OtlpHttpProtocol.httpJson) {
+    if (config.protocol == OtlpHttpProtocol.httpJson) {
       headers['Content-Type'] = 'application/json';
       final jsonValue = otlpProto3JsonWithHexIds(request);
       messageBytes = Uint8List.fromList(utf8.encode(jsonEncode(jsonValue)));
@@ -296,14 +301,14 @@ class OtlpHttpMetricExporter implements MetricExporter {
       messageBytes = request.writeToBuffer();
     }
 
-    if (_config.compression) {
+    if (config.compression) {
       headers['Content-Encoding'] = 'gzip';
     }
 
     var bodyBytes = messageBytes;
 
     // Apply gzip compression if configured
-    if (_config.compression) {
+    if (config.compression) {
       final gzip = GZip();
       final compressedBytes = await gzip.compress(messageBytes);
       bodyBytes = Uint8List.fromList(compressedBytes);
@@ -320,7 +325,7 @@ class OtlpHttpMetricExporter implements MetricExporter {
     try {
       final response = await _client
           .post(Uri.parse(endpointUrl), headers: headers, body: bodyBytes)
-          .timeout(_config.timeout);
+          .timeout(config.timeout);
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
         if (OTelLog.isDebug()) {
